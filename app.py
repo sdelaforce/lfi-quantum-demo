@@ -5,7 +5,7 @@ import glob
 import os
 
 # --- 1. SETUP & CONFIG ---
-st.set_page_config(page_title="LFI Quantum Readiness Index (Free)", layout="wide")
+st.set_page_config(page_title="LFI Quantum Readiness Index (Demo)", layout="wide")
 
 # CUSTOM CSS: BLACK SIDEBAR, WHITE TEXT, & CUSTOM BLUE BUTTON
 st.markdown("""
@@ -138,7 +138,7 @@ if qri_df is not None:
 
     # --- 4. UI: MAIN TABS ---
     st.title("LFI Quantum Readiness & Risk Radar™")
-    st.markdown("Assess your commercial exposure to the quantum revolution.")
+    st.markdown("Assess your commercial exposure to quantum technology.")
 
     tab_calc, tab_audit, tab_results = st.tabs(["💰 Financial Risk Calculator", "📝 3-Point Diagnostic", "📊 Your Results"])
 
@@ -190,7 +190,7 @@ if qri_df is not None:
                 st.session_state.user_scores[q['id']] = q['scores'][idx]
                 
                 # Expert Insight
-                st.markdown(f"<div class='insight-box'><b>💡 LFI Expert Insight:</b><br>{q['insight_impact']}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='insight-box'><b>💡 Chief Quantum Officer Insight:</b><br>{q['insight_impact']}</div>", unsafe_allow_html=True)
                 
                 st.markdown("---")
 

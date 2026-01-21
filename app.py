@@ -1,153 +1,533 @@
 import streamlit as st
+
 import pandas as pd
+
 import plotly.graph_objects as go
+
 import glob
+
 import os
 
-# --- 1. SETUP & CONFIG ---
-st.set_page_config(page_title="LFI Risk Pulse", layout="wide")
 
-# LFI Brand Styling (Black Sidebar, LFI Blue Highlights)
+
+# --- 1. SETUP & CONFIG ---
+
+st.set_page_config(page_title="LFI Quantum Readiness Index (Demo)", layout="wide")
+
+
+
+# CUSTOM CSS: BLACK SIDEBAR, WHITE TEXT, & CUSTOM BLUE BUTTON
+
 st.markdown("""
+
 <style>
-    [data-testid="stSidebar"] { background-color: #000000; }
-    [data-testid="stSidebar"] * { color: #FFFFFF !important; }
-    [data-testid="stSidebar"] a[kind="secondary"], [data-testid="stSidebar"] a[kind="primary"] {
-        background-color: #38b6ff !important; color: #FFFFFF !important; border: none !important; font-weight: bold !important;
+
+    /* 1. MAKE SIDEBAR BLACK */
+
+    [data-testid="stSidebar"] {
+
+        background-color: #000000;
+
     }
-    .insight-box { background-color: #f0f9ff; padding: 15px; border-radius: 8px; border-left: 5px solid #38b6ff; margin-top: 10px; }
+
+    
+
+    /* 2. MAKE SIDEBAR TEXT WHITE */
+
+    [data-testid="stSidebar"] * {
+
+        color: #FFFFFF !important;
+
+    }
+
+
+
+    /* 3. CUSTOM SIDEBAR BUTTON STYLE */
+
+    [data-testid="stSidebar"] a[kind="secondary"], [data-testid="stSidebar"] a[kind="primary"] {
+
+        background-color: #38b6ff !important;
+
+        color: #FFFFFF !important;
+
+        border: none !important;
+
+        font-weight: bold !important;
+
+    }
+
+    
+
+    [data-testid="stSidebar"] a:hover {
+
+        opacity: 0.8;
+
+        color: #FFFFFF !important;
+
+    }
+
+
+
+    /* 4. OTHER STYLES */
+
+    .metric-box { border: 1px solid #e0e0e0; padding: 20px; border-radius: 10px; background-color: #f9f9f9; }
+
+    .insight-box { background-color: #e8f4f8; padding: 15px; border-radius: 5px; border-left: 5px solid #2E86C1; }
+
 </style>
+
 """, unsafe_allow_html=True)
 
-# The 10 High-Signal Questions from your methodology
-DEMO_IDS = ["A.1", "A.5", "C.11", "E.21", "F.25", "G.26", "H.32", "I.33", "J.38", "K.42"]
+
+
+DEMO_QUESTIONS = ["A.1", "E.19", "H.32"]
+
+
 
 @st.cache_data
-def load_data_robust():
-    # Find files by keywords rather than exact full names
-    all_files = os.listdir('.')
-    qri_file = next((f for f in all_files if "Readiness" in f and "Executive" not in f and "Calculator" not in f), None)
-    lists_file = next((f for f in all_files if "Lists" in f), None)
-    
-    if not qri_file or not lists_file:
+
+def load_data():
+
+    """Smartly finds Excel file and locates the correct header row."""
+
+    # Find Excel
+
+    excel_files = glob.glob("*.xlsx")
+
+    if not excel_files:
+
+        st.error(f"❌ No Excel file found in: {os.getcwd()}")
+
         return None, None
+
+    excel_file = excel_files[0]
+
+
+
+    try:
+
+        # Load Raw to find Header
+
+        df_raw = pd.read_excel(excel_file, sheet_name='Quantum Readiness Index', header=None, engine='openpyxl')
+
+        header_row_idx = None
+
+        for i, row in df_raw.head(20).iterrows():
+
+            row_vals = row.astype(str).str.strip().tolist()
+
+            if "Strategic Pillar" in row_vals:
+
+                header_row_idx = i
+
+                break
+
         
-    # Load Main Data and find header dynamically
-    df_raw = pd.read_csv(qri_file, header=None)
-    header_idx = 0
-    for i, row in df_raw.head(20).iterrows():
-        if "Strategic Pillar" in row.values or "Assessment Standard" in row.values:
-            header_idx = i
-            break
-    
-    df = pd.read_csv(qri_file, header=header_idx)
-    df.columns = [str(c).strip() for c in df.columns]
-    
-    # Load Lists Data
-    ldf = pd.read_csv(lists_file, header=None)
-    
-    return df, ldf
 
-qri_df, lists_df = load_data_robust()
+        if header_row_idx is None: return None, None
 
-# Branding Logo (Fallback to URL)
-lfi_logo_url = "https://www.lfiusa.com/wp-content/uploads/2023/10/LFI-Logo-White-e1697523624838.png"
-st.sidebar.image(lfi_logo_url, use_container_width=True)
+
+
+        # Load Main Data
+
+        qri_df = pd.read_excel(excel_file, sheet_name='Quantum Readiness Index', header=header_row_idx, engine='openpyxl')
+
+        qri_df.columns = qri_df.columns.astype(str).str.strip()
+
+        if 'Strategic Pillar' in qri_df.columns:
+
+            qri_df['Strategic Pillar'] = qri_df['Strategic Pillar'].ffill()
+
+        qri_df = qri_df.dropna(subset=['Assessment Standard'])
+
+        
+
+        # Load Lists
+
+        lists_df = pd.read_excel(excel_file, sheet_name='Lists', header=None, engine='openpyxl')
+
+        
+
+        return qri_df, lists_df
+
+    except:
+
+        return None, None
+
+
+
+qri_df, lists_df = load_data()
+
+
 
 if qri_df is not None:
-    # --- 2. BUILD THE QUESTION DATABASE ---
+
+    # --- 2. DATA PROCESSING ---
+
     questions_db = []
+
+    
+
+    # Expert Insights Lookup
+
+    insights_lookup = {}
+
     for _, row in qri_df.iterrows():
-        std_val = str(row.get('Assessment Standard', ''))
-        short_id = std_val.split(":")[0].strip() if ":" in std_val else std_val
+
+        std = str(row['Assessment Standard'])
+
+        short_id = std.split(":")[0].strip() if ":" in std else std
+
         
-        if short_id in DEMO_IDS:
-            q_text, options, scores = "Unknown", [], []
-            for col_idx in range(lists_df.shape[1]):
-                col_data = lists_df.iloc[:, col_idx].astype(str)
-                # Match the Question ID in the lists sheet
-                if col_data.str.contains(short_id, na=False).any():
-                    found_row = col_data[col_data.str.contains(short_id)].index[0]
-                    q_text = col_data[found_row].split(":", 1)[-1].strip()
-                    options = lists_df.iloc[found_row+1 : found_row+6, col_idx].astype(str).tolist()
-                    scores = lists_df.iloc[found_row+1 : found_row+6, col_idx+1].astype(float).tolist()
-                    break
-            
+
+        insights_lookup[short_id] = {
+
+            "impact": row.get("Business Impact / ROI", "N/A"),
+
+            "process": row.get("LFI Process Description", "N/A"),
+
+            "pillar": row['Strategic Pillar']
+
+        }
+
+
+
+    # Extract dropdowns
+
+    num_cols = lists_df.shape[1]
+
+    for col_idx in range(2, num_cols, 3):
+
+        if col_idx + 1 >= num_cols: break
+
+        title = lists_df.iloc[4, col_idx]
+
+        if pd.isna(title) or not isinstance(title, str): continue
+
+        
+
+        short_id = title.split(":")[0].strip() if ":" in title else title
+
+        q_text = title.split(":", 1)[1].strip() if ":" in title else title
+
+        
+
+        if short_id in DEMO_QUESTIONS:
+
             questions_db.append({
-                "id": short_id, "question": q_text,
-                "pillar": str(row.get('Strategic Pillar', 'Operations')),
-                "options": options, "scores": scores,
-                "insight": str(row.get("Business Impact / ROI", "Strategic analysis required."))
+
+                "id": short_id,
+
+                "question": q_text,
+
+                "pillar": insights_lookup.get(short_id, {}).get("pillar", "Other"),
+
+                "options": lists_df.iloc[5:10, col_idx].tolist(),
+
+                "scores": lists_df.iloc[5:10, col_idx+1].tolist(),
+
+                "insight_impact": insights_lookup.get(short_id, {}).get("impact", ""),
+
+                "insight_process": insights_lookup.get(short_id, {}).get("process", "")
+
             })
 
-    # --- 3. UI TABS ---
-    tab_calc, tab_audit, tab_results = st.tabs(["Financial Risk", "Risk Pulse Diagnostic", "Strategic Radar"])
+
+
+    # --- 3. UI: SIDEBAR ---
+
+    
+
+    # === SMART LOGO LOADER ===
+
+    logo_files = glob.glob("*.png") + glob.glob("*.jpg") + glob.glob("*.jpeg")
+
+    
+
+    if logo_files:
+
+        st.sidebar.image(logo_files[0], use_container_width=True)
+
+    else:
+
+        st.sidebar.image("https://placehold.co/200x80/000000/FFFFFF?text=LFI+Logo", use_container_width=True)
+
+
+
+    st.sidebar.markdown("### 🚦 The Pilot Trap")
+
+    st.sidebar.info("Most organizations are stuck in 'Pilot Purgatory'.")
+
+    
+
+    st.sidebar.progress(3 / 45, text="Diagnostic Progress (3/45)")
+
+    st.sidebar.markdown("---")
+
+    st.sidebar.markdown("**Want the full 45-point audit?**")
+
+    
+
+    # === SIDEBAR BUTTON ===
+
+    st.sidebar.link_button("Unlock Full Version", "https://www.lfiusa.com/contact-form")
+
+
+
+    # --- 4. UI: MAIN TABS ---
+
+    st.title("LFI Quantum Readiness & Risk Radar™")
+
+    st.markdown("Assess your commercial exposure to quantum technology.")
+
+
+
+    tab_calc, tab_audit, tab_results = st.tabs(["💰 Financial Risk Calculator", "📝 3-Point Diagnostic", "📊 Your Results"])
+
+
+
+    # --- TAB 1: FINANCIAL CALCULATOR ---
 
     with tab_calc:
-        st.subheader("The Cost of Inaction")
-        col1, col2 = st.columns(2)
-        with col1:
-            rev = st.number_input("Annual Revenue ($)", value=500_000_000, step=10_000_000)
-            fric = st.slider("Efficiency Friction (%)", 0.0, 10.0, 3.5) / 100
-        with col2:
-            ip = st.number_input("Value of IP Assets ($)", value=100_000_000, step=5_000_000)
+
+        st.subheader("Quantify Your Cost of Stagnation")
+
+        st.markdown("Even if you are 'just watching' the market, inaction has a cost.")
+
         
-        fig_f = go.Figure(data=[
-            go.Bar(name='Efficiency Loss', x=['Revenue Leak'], y=[rev*fric], marker_color='#38b6ff'),
-            go.Bar(name='Security Exposure', x=['IP Exposure'], y=[ip], marker_color='#000000')
-        ])
-        fig_f.update_layout(template="plotly_white")
-        st.plotly_chart(fig_f, use_container_width=True)
 
-    with tab_audit:
-        st.subheader("High-Signal Strategic Pulse")
-        for q in questions_db:
-            st.markdown(f"**{q['id']}: {q['question']}**")
-            display_opts = [o.split(" - ")[0] for o in q['options']]
-            st.radio("Select maturity:", display_opts, key=f"ans_{q['id']}", horizontal=True)
-            st.markdown(f"<div class='insight-box'><b>LFI Strategic Insight:</b><br>{q['insight']}</div>", unsafe_allow_html=True)
-            st.divider()
+        col_c1, col_c2 = st.columns(2)
 
-    with tab_results:
-        # Dynamic recalculation based on current radio selections
-        p_scores = {"Strategy": [], "Technology": [], "Operations": []}
-        for q in questions_db:
-            p_name = "Strategy" if "Strategy" in q['pillar'] else ("Technology" if "Technology" in q['pillar'] else "Operations")
-            cur_label = st.session_state.get(f"ans_{q['id']}", q['options'][0].split(" - ")[0])
-            try:
-                idx = [o.split(" - ")[0] for o in q['options']].index(cur_label)
-                p_scores[p_name].append(q['scores'][idx])
-            except: pass
+        with col_c1:
 
-        s_avg = (sum(p_scores["Strategy"])/len(p_scores["Strategy"])/2.5)*100 if p_scores["Strategy"] else 0
-        t_avg = (sum(p_scores["Technology"])/len(p_scores["Technology"])/2.5)*100 if p_scores["Technology"] else 0
-        o_avg = (sum(p_scores["Operations"])/len(p_scores["Operations"])/2.5)*100 if p_scores["Operations"] else 0
+            st.markdown("#### 1. Efficiency Risk")
+
+            revenue = st.number_input("Annual Revenue ($)", value=500_000_000, step=10_000_000)
+
+            friction = st.slider("Rev. Lost to Friction (%)", 0.0, 10.0, 3.0, 0.1) / 100
+
+            
+
+            eff_risk = revenue * friction
+
+            st.metric("Annual Efficiency Loss", f"${eff_risk:,.0f}", delta="Money on the Table", delta_color="inverse")
+
+            st.caption(f"*You are losing ~${eff_risk/12:,.0f}/mo to classical inefficiencies.*")
+
+
+
+        with col_c2:
+
+            st.markdown("#### 2. Sovereignty Risk")
+
+            ip_val = st.number_input("Value of Trade Secrets ($)", value=100_000_000, step=5_000_000)
+
+            
+
+            st.metric("Asset Value Exposed", f"${ip_val:,.0f}", delta="HNDL Risk", delta_color="inverse")
+
+            st.caption("*If data shelf-life > 5 years, this asset is likely compromised.*")
+
         
-        # Weighted Total (14/29/57)
-        total = (s_avg * 0.14) + (t_avg * 0.29) + (o_avg * 0.57)
-
-        st.subheader("Executive Pillar Maturity")
-        
-        g1, g2, g3 = st.columns(3)
-        for col, n, v, c in zip([g1,g2,g3], ["Strategy", "Technology", "Operations"], [s_avg, t_avg, o_avg], ["#38b6ff", "#2E86C1", "#000000"]):
-            with col:
-                fig = go.Figure(go.Indicator(mode="gauge+number", value=v, title={'text': n}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': c}}))
-                fig.update_layout(height=250)
-                st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
+
+        st.info("💡 **Takeaway:** Use these figures for your internal business case.")
+
+
+
+    # --- TAB 2: THE DIAGNOSTIC ---
+
+    with tab_audit:
+
+        st.subheader("Core Capability Audit")
+
+        
+
+        if 'user_scores' not in st.session_state:
+
+            st.session_state.user_scores = {q['id']: 0.0 for q in questions_db}
+
+
+
+        for q in questions_db:
+
+            with st.container():
+
+                st.markdown(f"### {q['pillar']}")
+
+                st.markdown(f"**{q['id']}: {q['question']}**")
+
+                
+
+                # Options
+
+                opts = [str(o).split(" - ")[0] for o in q['options']]
+
+                full_opts = {str(o).split(" - ")[0]: o for o in q['options']}
+
+                
+
+                sel = st.radio(f"Select for {q['id']}", opts, key=q['id'], horizontal=True)
+
+                
+
+                # Save Score
+
+                idx = opts.index(sel)
+
+                st.session_state.user_scores[q['id']] = q['scores'][idx]
+
+                
+
+                # Expert Insight
+
+                st.markdown(f"<div class='insight-box'><b>💡 Chief Quantum Officer Insight:</b><br>{q['insight_impact']}</div>", unsafe_allow_html=True)
+
+                
+
+                st.markdown("---")
+
+
+
+    # --- TAB 3: RESULTS ---
+
+    with tab_results:
+
+        st.subheader("Your Capability Gap Analysis")
+
+        
+
         col_r1, col_r2 = st.columns([2, 1])
+
+        
+
         with col_r1:
-            st.subheader("Capability Radar")
+
+            categories = ["Strategy", "Technology", "Operations", "Governance", "Talent", "Innovation"]
+
+            scores = [0] * len(categories)
+
             
-            cats = ["Strategy", "Technology", "Operations", "Governance", "Talent", "Innovation"]
-            radar_vals = [s_avg, t_avg, o_avg, 20, 15, 30] 
-            fig_r = go.Figure()
-            fig_r.add_trace(go.Scatterpolar(r=[100]*6, theta=cats, fill='toself', name='Target State', line=dict(color='lightgrey', dash='dot')))
-            fig_r.add_trace(go.Scatterpolar(r=radar_vals + [radar_vals[0]], theta=cats + [cats[0]], fill='toself', name='Your Pulse', line=dict(color='#38b6ff')))
-            st.plotly_chart(fig_r, use_container_width=True)
+
+            # Simple mapping for demo
+
+            s_map = {"Strategy": 0, "Technology": 1, "Operations": 2}
+
+            
+
+            for q in questions_db:
+
+                cat_idx = -1
+
+                for k, v in s_map.items():
+
+                    if k in q['pillar']: cat_idx = v
+
+                
+
+                if cat_idx != -1:
+
+                    val = (st.session_state.user_scores[q['id']] / 2.5) * 100
+
+                    scores[cat_idx] = val
+
+
+
+            fig = go.Figure()
+
+            
+
+            # 1. Target State
+
+            fig.add_trace(go.Scatterpolar(
+
+                r=[100]*6, theta=categories,
+
+                fill='toself', name='Target State',
+
+                line=dict(color='lightgrey', dash='dot')
+
+            ))
+
+            
+
+            # 2. User Profile
+
+            fig.add_trace(go.Scatterpolar(
+
+                r=scores + scores[:1], theta=categories + categories[:1],
+
+                fill='toself', name='Your Profile',
+
+                line=dict(color='#2E86C1')
+
+            ))
+
+            
+
+            fig.update_layout(
+
+                polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+
+                showlegend=True,
+
+                title="Your Readiness Radar"
+
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+
+
         with col_r2:
-            st.metric("Total Readiness Index", f"{total:.1f}/100")
-            st.link_button("Upgrade to Full 44-Point Audit", "https://www.lfiusa.com/risk-radar", type="primary")
-else:
-    st.error("Application data source not found. Please ensure the CSV files are in the repository.")
+
+            st.markdown("### ⚠️ Analysis")
+
+            
+
+            avg = sum(st.session_state.user_scores.values()) / 3
+
+            norm_score = (avg / 2.5) * 100
+
+            
+
+            st.metric("Readiness Score", f"{norm_score:.0f}/100")
+
+            
+
+            if norm_score < 50:
+
+                st.warning("**Status: The Pilot Trap**")
+
+                st.markdown("You lack infrastructure to scale.")
+
+            elif norm_score < 80:
+
+                st.info("**Status: The Scaler**")
+
+                st.markdown("Good progress, governance gaps detected.")
+
+            else:
+
+                st.success("**Status: Leader**")
+
+            
+
+            st.markdown("---")
+
+            st.markdown("### 🔒 Missing Data")
+
+            st.markdown("Your radar is incomplete. You are missing diagnostics for:")
+
+            st.markdown("- *IP Defense Strategy*")
+
+            st.markdown("- *Workforce Density*")
+
+            st.markdown("- *Supply Chain Risk*")
+
+            
+
+            # === UPDATED MAIN AREA BUTTON ===
+
+            st.link_button("Unlock Full Assessment", "https://www.lfiusa.com/contact-form", type="primary")

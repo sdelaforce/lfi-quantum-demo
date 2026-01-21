@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import glob
 import os
 
 # --- 1. SETUP & CONFIG ---
 st.set_page_config(page_title="LFI Risk Pulse", layout="wide")
 
-# LFI Brand Styling
+# LFI Brand Styling (Black Sidebar, LFI Blue Highlights)
 st.markdown("""
 <style>
     [data-testid="stSidebar"] { background-color: #000000; }
@@ -23,61 +24,60 @@ DEMO_IDS = ["A.1", "A.5", "C.11", "E.21", "F.25", "G.26", "H.32", "I.33", "J.38"
 
 @st.cache_data
 def load_data_robust():
-    # Explicitly using the file names from your environment
-    qri_filename = 'LFI Quantum Readiness Index.xlsx - Quantum Readiness Index.csv'
-    lists_filename = 'LFI Quantum Readiness Index.xlsx - Lists.csv'
+    # Find files by keywords rather than exact full names
+    all_files = os.listdir('.')
+    qri_file = next((f for f in all_files if "Readiness" in f and "Executive" not in f and "Calculator" not in f), None)
+    lists_file = next((f for f in all_files if "Lists" in f), None)
     
-    if not os.path.exists(qri_filename) or not os.path.exists(lists_filename):
+    if not qri_file or not lists_file:
         return None, None
         
-    # Load QRI Main Sheet
-    qri_df = pd.read_csv(qri_filename, header=None)
-    # Find Header Row
-    header_idx = 3 # Based on CSV preview, Row 3 is 'Strategic Pillar'
-    qri_df.columns = qri_df.iloc[header_idx]
-    qri_df = qri_df.iloc[header_idx+1:].reset_index(drop=True)
-    qri_df.columns = [str(c).strip() for c in qri_df.columns]
+    # Load Main Data and find header dynamically
+    df_raw = pd.read_csv(qri_file, header=None)
+    header_idx = 0
+    for i, row in df_raw.head(20).iterrows():
+        if "Strategic Pillar" in row.values or "Assessment Standard" in row.values:
+            header_idx = i
+            break
     
-    # Load Lists Sheet
-    lists_df = pd.read_csv(lists_filename, header=None)
+    df = pd.read_csv(qri_file, header=header_idx)
+    df.columns = [str(c).strip() for c in df.columns]
     
-    return qri_df, lists_df
+    # Load Lists Data
+    ldf = pd.read_csv(lists_file, header=None)
+    
+    return df, ldf
 
 qri_df, lists_df = load_data_robust()
 
-# Branding Logo Fallback
+# Branding Logo (Fallback to URL)
 lfi_logo_url = "https://www.lfiusa.com/wp-content/uploads/2023/10/LFI-Logo-White-e1697523624838.png"
 st.sidebar.image(lfi_logo_url, use_container_width=True)
 
 if qri_df is not None:
     # --- 2. BUILD THE QUESTION DATABASE ---
     questions_db = []
-    
     for _, row in qri_df.iterrows():
         std_val = str(row.get('Assessment Standard', ''))
         short_id = std_val.split(":")[0].strip() if ":" in std_val else std_val
         
         if short_id in DEMO_IDS:
-            # Find options in Lists sheet
             q_text, options, scores = "Unknown", [], []
             for col_idx in range(lists_df.shape[1]):
                 col_data = lists_df.iloc[:, col_idx].astype(str)
-                # Looking for the ID in the header row of Lists (Row 4)
-                if col_data.iloc[4].startswith(short_id):
-                    q_text = col_data.iloc[4].split(":", 1)[-1].strip()
-                    # Options are in rows 5-9
-                    options = lists_df.iloc[5:10, col_idx].astype(str).tolist()
-                    # Scores are in the next column over
-                    scores = lists_df.iloc[5:10, col_idx+1].astype(float).tolist()
+                # Match the Question ID in the lists sheet
+                if col_data.str.contains(short_id, na=False).any():
+                    found_row = col_data[col_data.str.contains(short_id)].index[0]
+                    q_text = col_data[found_row].split(":", 1)[-1].strip()
+                    options = lists_df.iloc[found_row+1 : found_row+6, col_idx].astype(str).tolist()
+                    scores = lists_df.iloc[found_row+1 : found_row+6, col_idx+1].astype(float).tolist()
                     break
             
             questions_db.append({
-                "id": short_id,
-                "question": q_text,
+                "id": short_id, "question": q_text,
                 "pillar": str(row.get('Strategic Pillar', 'Operations')),
-                "options": options,
-                "scores": scores,
-                "insight": str(row.get("Business Impact / ROI", "Strategy analysis required."))
+                "options": options, "scores": scores,
+                "insight": str(row.get("Business Impact / ROI", "Strategic analysis required."))
             })
 
     # --- 3. UI TABS ---
@@ -87,28 +87,25 @@ if qri_df is not None:
         st.subheader("The Cost of Inaction")
         col1, col2 = st.columns(2)
         with col1:
-            rev = st.number_input("Annual Revenue ($)", value=500_000_000)
+            rev = st.number_input("Annual Revenue ($)", value=500_000_000, step=10_000_000)
             fric = st.slider("Efficiency Friction (%)", 0.0, 10.0, 3.5) / 100
         with col2:
-            ip = st.number_input("Value of IP Assets ($)", value=100_000_000)
+            ip = st.number_input("Value of IP Assets ($)", value=100_000_000, step=5_000_000)
         
         fig_f = go.Figure(data=[
             go.Bar(name='Efficiency Loss', x=['Revenue Leak'], y=[rev*fric], marker_color='#38b6ff'),
             go.Bar(name='Security Exposure', x=['IP Exposure'], y=[ip], marker_color='#000000')
         ])
-        fig_f.update_layout(template="plotly_white", title="Commercial Value at Risk")
+        fig_f.update_layout(template="plotly_white")
         st.plotly_chart(fig_f, use_container_width=True)
 
     with tab_audit:
-        st.subheader("Strategic Capability Pulse")
-        if not questions_db:
-            st.warning("Could not align questions with data source. Check IDs.")
+        st.subheader("High-Signal Strategic Pulse")
         for q in questions_db:
             st.markdown(f"**{q['id']}: {q['question']}**")
-            # Cleaning label for display
             display_opts = [o.split(" - ")[0] for o in q['options']]
             st.radio("Select maturity:", display_opts, key=f"ans_{q['id']}", horizontal=True)
-            st.markdown(f"<div class='insight-box'><b>LFI Insight:</b><br>{q['insight']}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='insight-box'><b>LFI Strategic Insight:</b><br>{q['insight']}</div>", unsafe_allow_html=True)
             st.divider()
 
     with tab_results:
@@ -130,8 +127,8 @@ if qri_df is not None:
         total = (s_avg * 0.14) + (t_avg * 0.29) + (o_avg * 0.57)
 
         st.subheader("Executive Pillar Maturity")
-        g1, g2, g3 = st.columns(3)
         
+        g1, g2, g3 = st.columns(3)
         for col, n, v, c in zip([g1,g2,g3], ["Strategy", "Technology", "Operations"], [s_avg, t_avg, o_avg], ["#38b6ff", "#2E86C1", "#000000"]):
             with col:
                 fig = go.Figure(go.Indicator(mode="gauge+number", value=v, title={'text': n}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': c}}))
@@ -147,10 +144,10 @@ if qri_df is not None:
             radar_vals = [s_avg, t_avg, o_avg, 20, 15, 30] 
             fig_r = go.Figure()
             fig_r.add_trace(go.Scatterpolar(r=[100]*6, theta=cats, fill='toself', name='Target State', line=dict(color='lightgrey', dash='dot')))
-            fig_r.add_trace(go.Scatterpolar(r=radar_vals + [radar_vals[0]], theta=cats + [cats[0]], fill='toself', name='Your Profile', line=dict(color='#38b6ff')))
+            fig_r.add_trace(go.Scatterpolar(r=radar_vals + [radar_vals[0]], theta=cats + [cats[0]], fill='toself', name='Your Pulse', line=dict(color='#38b6ff')))
             st.plotly_chart(fig_r, use_container_width=True)
         with col_r2:
             st.metric("Total Readiness Index", f"{total:.1f}/100")
-            st.link_button("Request Full Audit", "https://www.lfiusa.com/risk-radar", type="primary")
+            st.link_button("Upgrade to Full 44-Point Audit", "https://www.lfiusa.com/risk-radar", type="primary")
 else:
-    st.error("Application data source not found. Ensure CSV files are correctly named in the repository.")
+    st.error("Application data source not found. Please ensure the CSV files are in the repository.")

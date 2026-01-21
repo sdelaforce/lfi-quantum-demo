@@ -18,16 +18,28 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# The 10 High-Signal Questions
+# The 10 High-Signal Questions for the Free Version
 DEMO_IDS = ["A.1", "A.5", "C.11", "E.21", "F.25", "G.26", "H.32", "I.33", "J.38", "K.42"]
 
 @st.cache_data
 def load_data_robust():
-    # 1. Try to find the QRI Data
-    qri_file = glob.glob("*Quantum Readiness Index.csv")[0]
-    df = pd.read_csv(qri_file, header=None)
+    # Detect files by their 'sheet name' suffix created during CSV export
+    all_csvs = glob.glob("*.csv")
     
-    # Find the header row by searching for "Strategic Pillar"
+    qri_file = None
+    lists_file = None
+    
+    for f in all_csvs:
+        if "Quantum Readiness Index.csv" in f and "Executive Summary" not in f:
+            qri_file = f
+        if "Lists.csv" in f:
+            lists_file = f
+            
+    if not qri_file or not lists_file:
+        return None, None
+        
+    # Load QRI Data and find headers
+    df = pd.read_csv(qri_file, header=None)
     header_idx = 0
     for i, row in df.head(15).iterrows():
         if "Strategic Pillar" in row.values:
@@ -37,15 +49,14 @@ def load_data_robust():
     df = df.iloc[header_idx+1:].reset_index(drop=True)
     df.columns = [str(c).strip() for c in df.columns]
     
-    # 2. Try to find the Lists Data
-    lists_file = glob.glob("*Lists.csv")[0]
+    # Load Lists Data
     ldf = pd.read_csv(lists_file, header=None)
     
     return df, ldf
 
 qri_df, lists_df = load_data_robust()
 
-# Logo Fallback
+# Logo Fallback - Using LFI Website URL
 lfi_logo_url = "https://www.lfiusa.com/wp-content/uploads/2023/10/LFI-Logo-White-e1697523624838.png"
 st.sidebar.image(lfi_logo_url, use_container_width=True)
 
@@ -58,28 +69,30 @@ if qri_df is not None:
         short_id = std_val.split(":")[0].strip() if ":" in std_val else std_val
         
         if short_id in DEMO_IDS:
-            # Find options in Lists.csv
             q_text = "Unknown Question"
             options, scores = [], []
             
-            # Scan Lists columns for the ID
+            # Find matching column in Lists.csv
             for col_idx in range(lists_df.shape[1]):
                 col_data = lists_df.iloc[:, col_idx].astype(str)
                 if col_data.str.contains(short_id, na=False).any():
-                    # The ID is usually in row 3 or 4 of the CSV
-                    q_text = col_data[col_data.str.contains(short_id)].values[0].split(":", 1)[-1].strip()
-                    # Options are usually the next 5 rows after the score identifiers
-                    options = lists_df.iloc[4:9, col_idx].astype(str).tolist()
-                    scores = lists_df.iloc[4:9, col_idx+1].astype(float).tolist()
+                    # Extract the Question Text
+                    found_row = col_data[col_data.str.contains(short_id)].index[0]
+                    q_text = col_data[found_row].split(":", 1)[-1].strip()
+                    
+                    # Extract 5 Options and their corresponding Scores (usually columns are side-by-side)
+                    # We look for the rows that start with "1.", "2.", etc.
+                    options = lists_df.iloc[found_row+1 : found_row+6, col_idx].astype(str).tolist()
+                    scores = lists_df.iloc[found_row+1 : found_row+6, col_idx+1].astype(float).tolist()
                     break
             
             questions_db.append({
                 "id": short_id,
                 "question": q_text,
-                "pillar": str(row.get('Strategic Pillar', 'Operations')).ffill() if hasattr(row.get('Strategic Pillar'), 'ffill') else str(row.get('Strategic Pillar')),
+                "pillar": str(row.get('Strategic Pillar', 'Operations')),
                 "options": options,
                 "scores": scores,
-                "insight": str(row.get("Business Impact / ROI", "Strategy analysis required."))
+                "insight": str(row.get("Business Impact / ROI", "Strategic analysis required."))
             })
 
     # --- 3. UI TABS ---
@@ -89,32 +102,31 @@ if qri_df is not None:
         st.subheader("The Cost of Inaction")
         col1, col2 = st.columns(2)
         with col1:
-            rev = st.number_input("Annual Revenue $", value=500_000_000)
-            fric = st.slider("Efficiency Friction %", 0.0, 10.0, 3.5) / 100
+            rev = st.number_input("Annual Revenue ($)", value=500_000_000, step=10_000_000)
+            fric = st.slider("Efficiency Friction (%)", 0.0, 10.0, 3.5) / 100
         with col2:
-            ip = st.number_input("Value of IP $", value=100_000_000)
+            ip = st.number_input("Value of Protected IP ($)", value=100_000_000, step=5_000_000)
         
+        eff_loss = rev * fric
         fig_f = go.Figure(data=[
-            go.Bar(name='Efficiency Loss', x=['Revenue Leak'], y=[rev*fric], marker_color='#38b6ff'),
-            go.Bar(name='Security Exposure', x=['IP Exposure'], y=[ip], marker_color='#000000')
+            go.Bar(name='Efficiency Loss', x=['Revenue Leak'], y=[eff_loss], marker_color='#38b6ff'),
+            go.Bar(name='Sovereignty Risk', x=['IP Exposure'], y=[ip], marker_color='#000000')
         ])
+        fig_f.update_layout(template="plotly_white", margin=dict(t=20))
         st.plotly_chart(fig_f, use_container_width=True)
 
     with tab_audit:
-        st.subheader("Strategic Capability Pulse")
-        # Ensure we have a clean list of questions
-        if not questions_db:
-            st.error("Question alignment failed. Please refresh.")
-        else:
-            for q in questions_db:
-                st.markdown(f"**{q['id']}: {q['question']}**")
-                display_opts = [o.split(" - ")[0] for o in q['options']]
-                st.radio("Select maturity:", display_opts, key=f"ans_{q['id']}", horizontal=True)
-                st.markdown(f"<div class='insight-box'><b>Strategic Insight:</b><br>{q['insight']}</div>", unsafe_allow_html=True)
-                st.divider()
+        st.subheader("High-Signal Strategic Pulse")
+        for q in questions_db:
+            st.markdown(f"**{q['id']}: {q['question']}**")
+            # Clean display labels
+            display_opts = [o.split(" - ")[0] for o in q['options']]
+            st.radio("Maturity Level:", display_opts, key=f"ans_{q['id']}", horizontal=True)
+            st.markdown(f"<div class='insight-box'><b>LFI Insight:</b><br>{q['insight']}</div>", unsafe_allow_html=True)
+            st.divider()
 
     with tab_results:
-        # Recalculate based on current state
+        # Re-calculating averages based on active session state
         p_scores = {"Strategy": [], "Technology": [], "Operations": []}
         for q in questions_db:
             p_name = "Strategy" if "Strategy" in q['pillar'] else ("Technology" if "Technology" in q['pillar'] else "Operations")
@@ -122,38 +134,47 @@ if qri_df is not None:
             try:
                 idx = [o.split(" - ")[0] for o in q['options']].index(cur_label)
                 p_scores[p_name].append(q['scores'][idx])
-            except: pass
+            except:
+                p_scores[p_name].append(0.0)
 
         s_avg = (sum(p_scores["Strategy"])/len(p_scores["Strategy"])/2.5)*100 if p_scores["Strategy"] else 0
         t_avg = (sum(p_scores["Technology"])/len(p_scores["Technology"])/2.5)*100 if p_scores["Technology"] else 0
         o_avg = (sum(p_scores["Operations"])/len(p_scores["Operations"])/2.5)*100 if p_scores["Operations"] else 0
         
-        # Weighted Total (14/29/57)
         total = (s_avg * 0.14) + (t_avg * 0.29) + (o_avg * 0.57)
 
-        st.subheader("Pillar Maturity")
+        st.subheader("Executive Maturity Profile")
         g1, g2, g3 = st.columns(3)
-        # 
+        
         for col, n, v, c in zip([g1,g2,g3], ["Strategy", "Technology", "Operations"], [s_avg, t_avg, o_avg], ["#38b6ff", "#2E86C1", "#000000"]):
             with col:
                 fig = go.Figure(go.Indicator(mode="gauge+number", value=v, title={'text': n}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': c}}))
-                fig.update_layout(height=250)
+                fig.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20))
                 st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
         col_r1, col_r2 = st.columns([2, 1])
         with col_r1:
             st.subheader("Capability Radar")
-            # 
+            
             cats = ["Strategy", "Technology", "Operations", "Governance", "Talent", "Innovation"]
             radar_vals = [s_avg, t_avg, o_avg, 20, 15, 30] 
             fig_r = go.Figure()
-            fig_r.add_trace(go.Scatterpolar(r=[100]*6, theta=cats, fill='toself', name='Benchmark', line=dict(color='lightgrey', dash='dot')))
-            fig_r.add_trace(go.Scatterpolar(r=radar_vals + [radar_vals[0]], theta=cats + [cats[0]], fill='toself', name='Your Pulse', line=dict(color='#38b6ff')))
+            fig_r.add_trace(go.Scatterpolar(r=[100]*6, theta=cats, fill='toself', name='Target State', line=dict(color='lightgrey', dash='dot')))
+            fig_r.add_trace(go.Scatterpolar(r=radar_vals + [radar_vals[0]], theta=cats + [cats[0]], fill='toself', name='Your Profile', line=dict(color='#38b6ff')))
+            fig_r.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), margin=dict(l=50, r=50, t=20, b=20))
             st.plotly_chart(fig_r, use_container_width=True)
         with col_r2:
             st.metric("Total Readiness Index", f"{total:.1f}/100")
-            st.link_button("Request Full Audit", "https://www.lfiusa.com/risk-radar", type="primary")
+            st.markdown("### Risk Analysis")
+            if total < 50:
+                st.error("Status: High Exposure")
+                st.write("Immediate action required to mitigate cryptographic and operational risk.")
+            else:
+                st.info("Status: Emergent")
+                st.write("Foundational readiness detected. Governance and Talent gaps remain.")
+            
+            st.link_button("Upgrade to Full 44-Point Audit", "https://www.lfiusa.com/risk-radar", type="primary")
 
 else:
-    st.error("Data Source Not Found")
+    st.error("Application data source not found. Please ensure CSV files are uploaded.")

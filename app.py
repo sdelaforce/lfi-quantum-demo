@@ -1,9 +1,3 @@
-It appears the application is struggling to find the files because the specific filenames in your environment contain the .xlsx extension as part of the string (e.g., LFI Quantum Readiness Index.xlsx - Quantum Readiness Index.csv).
-
-I have modified the load_data_robust function to use a flexible string matching system. Instead of looking for an exact start or end, it searches for the key terms "Quantum Readiness Index" and "Lists" anywhere in the filename, ensuring the app initializes correctly regardless of the export naming convention.
-
-Updated Resilient Code
-Python
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
